@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: monetixra
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
+      - key: BASE_URL
+        fromService:
+          type: web
+          name: mediaearn-ultra-x
+          property: host
+    plan: free
