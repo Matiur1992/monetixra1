@@ -1,0 +1,17 @@
+
+> monetixra@1.0.0 start
+> node server.js
+
+
+🚀 Monetixra v8.0 — Port 3000
+   ✅ Socket.io Real-time
+   ✅ WebRTC Video/Audio
+   ✅ OpenAI + DeepSeek AI
+   ✅ Google Translate + Vision
+   ✅ Supabase Database
+   ✅ Metered TURN Server
+   ✅ Web Push Notifications
+   ⚠️  bKash Payment
+   ⚠️  Nagad Payment
+   ✅ Rate Limiting + Security
+

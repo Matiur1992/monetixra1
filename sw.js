@@ -1,14 +1,23 @@
 // ============================================================
-//  MediaEarn Ultra X — Service Worker (PWA)
-//  Offline support + Cache-first strategy
+//  Monetixra — Enhanced Service Worker (PWA)
+//  Offline support + Push Notifications + Background Sync
 // ============================================================
-const CACHE_NAME = 'monetixra-v1';
-const ASSETS = [
+const CACHE_NAME = 'monetixra-v5';
+const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
+];
+
+const CDN_ASSETS = [
   'https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=Outfit:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap',
   'https://cdn.socket.io/4.7.5/socket.io.min.js',
+  'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js',
 ];
+
+const ASSETS = [...STATIC_ASSETS, ...CDN_ASSETS];
 
 // Install: cache essential assets
 self.addEventListener('install', e => {
@@ -42,7 +51,22 @@ self.addEventListener('fetch', e => {
   // Navigation: network-first, fallback to cached index.html
   if (e.request.mode === 'navigate') {
     return e.respondWith(
-      fetch(e.request).catch(() => caches.match('/index.html'))
+      fetch(e.request, { cache: 'no-store' }).catch(() => caches.match('/index.html'))
+    );
+  }
+
+  // Images and media thumbnails: stale-while-revalidate for faster mobile repeat views
+  if (e.request.destination === 'image' || /\.(png|jpg|jpeg|webp|gif|svg)$/i.test(url.pathname)) {
+    return e.respondWith(
+      caches.open(CACHE_NAME).then(cache =>
+        cache.match(e.request).then(cached => {
+          const fresh = fetch(e.request).then(response => {
+            if(response && response.status === 200) cache.put(e.request, response.clone());
+            return response;
+          }).catch(() => cached);
+          return cached || fresh;
+        })
+      )
     );
   }
 

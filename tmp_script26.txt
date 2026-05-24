@@ -1,0 +1,120 @@
+
+// ========== COMPLETE JAVASCRIPT ==========
+const ADMIN_EMAIL = 'myworktoolsp3@gmail.com';
+const ADMIN_PHONE = '01757008864';
+const ADMIN_ID = 'admin_matiur';
+const ADMIN_PASS = 'F<%0K"-9!H5.X+(*#)`';
+const ADMIN_CUT = 0.10;
+const PTS_PER_USD = 1000;
+const MIN_WITHDRAW = 50000;
+const STORAGE_KEY = 'mxt_';
+const MLM_LEVELS = [{ level: 1, commission: 0.10, name: 'Level 1' },{ level: 2, commission: 0.05, name: 'Level 2' },{ level: 3, commission: 0.03, name: 'Level 3' },{ level: 4, commission: 0.02, name: 'Level 4' },{ level: 5, commission: 0.01, name: 'Level 5' },{ level: 6, commission: 0.01, name: 'Level 6' },{ level: 7, commission: 0.01, name: 'Level 7' },{ level: 8, commission: 0.01, name: 'Level 8' },{ level: 9, commission: 0.01, name: 'Level 9' },{ level: 10, commission: 0.01, name: 'Level 10' }];
+const LANGUAGES = { en: { name: 'English', flag: '🇬🇧' }, bn: { name: 'Bengali', flag: '🇧🇩' }, hi: { name: 'Hindi', flag: '🇮🇳' }, es: { name: 'Spanish', flag: '🇪🇸' }, fr: { name: 'French', flag: '🇫🇷' }, de: { name: 'German', flag: '🇩🇪' }, zh: { name: 'Chinese', flag: '🇨🇳' }, ja: { name: 'Japanese', flag: '🇯🇵' }, ar: { name: 'Arabic', flag: '🇸🇦' }, ru: { name: 'Russian', flag: '🇷🇺' }, pt: { name: 'Portuguese', flag: '🇵🇹' } };
+let D = { users: {}, posts: [], txs: [], notifs: [], chats: {}, stories: [], groups: [], marketplace: [], nfts: [], apps: [] };
+let CU = null;
+let currentChatId = null;
+let activeCat = 'all';
+let pfData = null, pfMime = null, pfName = null, pfFile = null;
+let grpMems = [];
+let disappearTimer = 0;
+let isRecordingVoice = false;
+let mediaRecorder = null;
+let currentLang = 'en';
+const COLORS = ['#00ffaa','#00d4ff','#f59e0b','#f43f5e','#a78bfa','#38bdf8','#fb923c','#ec4899'];
+const COPYRIGHT_KEYWORDS = ['©','copyright','all rights reserved','proprietary'];
+const MAX_ADS_PER_DAY   = 50;   // max ads user can watch per day
+const MAX_TASKS_PER_DAY = 30;   // max tasks
+const MAX_REF_BONUS     = 10;   // max referral bonuses per day
+
+// ── Core Utilities ───────────────────────────────
+const G = id => document.getElementById(id);
+const V = id => { let e = G(id); return e ? e.value.trim() : ''; };
+const setV = (id, val) => { let e = G(id); if(e) e.value = val; };
+const hide = id => { let e = G(id); if(e) e.style.display = 'none'; };
+const show = id => { let e = G(id); if(e) e.style.display = 'block'; };
+const flex = id => { let e = G(id); if(e) e.style.display = 'flex'; };
+
+// ── Password hashing (SHA-256) with Fallback ───────────────────────────────
+async function hashPass(pw) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw + 'mxt_salt_2025'));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  } catch(e) {
+    let h = 0;
+    for(let i=0;i<pw.length;i++) h = Math.imul(31,h)+pw.charCodeAt(i)|0;
+    return 'fb_' + Math.abs(h).toString(16) + pw.length;
+  }
+}
+// Check if password is already hashed
+function isHashed(pw) { return pw && (pw.length === 64 || pw.startsWith('fb_')); }
+const esc = s => { if(!s) return ''; return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]); };
+const ago = ts => { let s = Math.floor((Date.now() - ts)/1000); if(s<60) return 'now'; if(s<3600) return Math.floor(s/60)+'m'; if(s<86400) return Math.floor(s/3600)+'h'; return Math.floor(s/86400)+'d'; };
+const fmt = n => { if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n||0; };
+const rOtp = () => Math.floor(100000 + Math.random()*900000);
+const uid = () => 'u'+Date.now()+Math.random().toString(36).slice(2,8);
+const pid = () => 'p'+Date.now()+Math.random().toString(36).slice(2,8);
+const randomGrad = () => { let g=[['#6d28d9','#00ffaa'],['#0ea5e9','#10b981'],['#f59e0b','#ef4444'],['#ec4899','#8b5cf6']]; return g[Math.floor(Math.random()*g.length)]; };
+const vis2ico = v => ({ public:'🌐', friends:'👥', private:'🔒' })[v]||'🌐';
+
+// Rich Editor Functions
+function execCmd(cmd) { document.execCommand(cmd, false, null); document.getElementById('postEditor').focus(); }
+function insertLink() { let url = prompt('Enter URL:'); if(url) document.execCommand('createLink', false, url); }
+
+// MLM Functions
+function getUpline(userId, level = 1) {
+  let user = D.users[userId];
+  if(!user || !user.referredBy) return null;
+  if(level === 1) return user.referredBy;
+  return getUpline(user.referredBy, level - 1);
+}
+function addMLMCommission(userId, amount, reason) {
+  for(let i = 0; i < MLM_LEVELS.length; i++) {
+    let uplineId = getUpline(userId, i + 1);
+    if(uplineId && D.users[uplineId]) {
+      let commission = Math.floor(amount * MLM_LEVELS[i].commission);
+      if(commission > 0) {
+        D.users[uplineId].points = (D.users[uplineId].points || 0) + commission;
+        D.users[uplineId].mlmPts = (D.users[uplineId].mlmPts || 0) + commission;
+        D.txs.unshift({ id: 'tx'+Date.now(), type: 'mlm', label: `${MLM_LEVELS[i].name} Commission from ${reason}`, pts: commission, at: Date.now(), user: uplineId });
+        addNotif(uplineId, 'mlm', '🏆', `You earned ${commission} pts from ${MLM_LEVELS[i].name} commission!`);
+      }
+    }
+  }
+}
+function getMLMMembersCount(userId, level) {
+  if(level === 1) return (D.users[userId]?.refs?.length || 0);
+  let count = 0;
+  (D.users[userId]?.refs || []).forEach(ref => count += getMLMMembersCount(ref, level - 1));
+  return count;
+}
+
+// NFT Functions
+function mintNFT() { if(!CU) { toast('e','Login required'); return; } if(CU.points < 500) { toast('e','Need 500 pts to mint NFT'); return; } openModal('nftModal'); }
+function mintNFTSubmit() {
+  let name = V('nftName'), desc = V('nftDesc'), price = parseInt(V('nftPrice')), file = document.getElementById('nftFile').files[0];
+  if(!name || !desc || !price || !file) { toast('e','Fill all fields'); return; }
+  if(price < 100) { toast('e','Minimum price 100 pts'); return; }
+  if(CU.points < 500) { toast('e','Insufficient points'); return; }
+  CU.points -= 500;
+  let reader = new FileReader();
+  reader.onload = e => {
+    let nft = { id: 'nft'+Date.now(), name, description: desc, price, image: e.target.result, creator: CU.id, creatorName: CU.name, owner: CU.id, createdAt: Date.now(), sold: false, royalty: 5 };
+    D.nfts = D.nfts || []; D.nfts.unshift(nft);
+    saveData(); closeModal('nftModal'); toast('s','NFT Minted!'); rNFTMarketplace();
+  };
+  reader.readAsDataURL(file);
+}
+function buyNFT(nftId) {
+  if(!CU) { toast('e','Login required'); return; }
+  let nft = D.nfts.find(n => n.id === nftId);
+  if(!nft || nft.sold) { toast('e','NFT not available'); return; }
+  if(CU.points < nft.price) { toast('e','Insufficient points'); return; }
+  CU.points -= nft.price;
+  let creator = D.users[nft.creator];
+  if(creator) {
+    let royalty = Math.floor(nft.price * 0.05);
+    let creatorEarn = nft.price - royalty;
+    creator.points += creatorEarn;
+    creator.nftPts = (creator.nftPts || 0) + creatorEarn;
+    D.users[ADMIN_ID].points += royalty;
+    D.users[ADMIN_ID].adminRevenue += royalty;

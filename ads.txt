@@ -1,0 +1,19 @@
+# AdSense
+google.com, pub-2397116277801081, DIRECT, f08c47fec0942fa0
+
+# AdMob (same publisher as AdSense)
+google.com, pub-2253243248364888, DIRECT, f08c47fec0942fa0
+
+# Media.net / Contextual
+media.net, 9316157812, DIRECT
+
+# ProfitableCPMRate Network
+profitablecpmratenetwork.com, 29179785, DIRECT
+profitablecpmratenetwork.com, 29179786, DIRECT
+profitablecpmratenetwork.com, 29179787, DIRECT
+profitablecpmratenetwork.com, 29179788, DIRECT
+profitablecpmratenetwork.com, 29179789, DIRECT
+profitablecpmratenetwork.com, 29179790, DIRECT
+
+# Adsterra
+adsterra.com, 55d8dff1aa431254a145e6f12f01b775, DIRECT
