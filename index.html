@@ -2638,6 +2638,17 @@ body.light-theme .top-bar { background:#ffffff; border-bottom:1px solid rgba(0,0
 </div>
 
 <!-- ========== BOTTOM NAV ========== -->
+<div id="mxtBottomLiveAd" class="mxt-bottom-live-ad" data-ad-type="bottom_banner">
+  <div class="mxt-bottom-track" id="mxtBottomAdTrack">
+    <span>Sponsored</span>
+    <b>Google AdSense</b>
+    <span>Adsterra native</span>
+    <b>AdMob banner</b>
+    <span>Rewarded video</span>
+    <b>Creator offer</b>
+  </div>
+  <button class="mxt-bottom-claim" onclick="mxtClaimBottomAd?.(this)">+4 pts</button>
+</div>
 <div id="btmNav">
   <button class="bn on" data-p="feed" onclick="nav('feed')" style="cursor:pointer !important;pointer-events:auto !important;position:relative !important;z-index:99999 !important;"><span class="ico">🏠</span><span class="lbl">Feed</span></button>
   <button class="bn" data-p="explore" onclick="nav('explore')" style="cursor:pointer !important;pointer-events:auto !important;position:relative !important;z-index:99999 !important;"><span class="ico">🔭</span><span class="lbl">Explore</span></button>
@@ -4638,7 +4649,7 @@ function rFeed(reset=true) {
   const start = _feedPage * _FEED_SIZE;
   const chunk = posts.slice(start, start + _FEED_SIZE);
   const frag  = document.createDocumentFragment();
-  let adIdx   = _feedPage * 2;
+  let adIdx   = _feedPage * Math.ceil(_FEED_SIZE / 3);
   chunk.forEach((p,i) => {
     if(i>0 && i%3===0){ let ad=mkFeedAd(adIdx++); if(ad) frag.appendChild(ad); }
     frag.appendChild(mkPost(p));
@@ -5830,6 +5841,7 @@ function submitPost() {
     toast('s','Post minted as NFT! +500 pts deducted');
   }
   saveData();
+  if(socketReady && socket) socket.emit('post:create', {post});
   OfflineCache.save(post);
   closeModal('postModal');
   rFeed();
@@ -6193,7 +6205,7 @@ async function doWithdraw() {
   try {
     const r = await fetch('/api/withdrawals/request', {
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json','x-user-id':CU.id},
       body:JSON.stringify({userId:CU.id, amount:amt, method:meth, account:acc})
     });
     const d = await r.json();
@@ -7133,7 +7145,7 @@ function renderAdminKYC() {
 async function renderAdminWithdrawals() {
   let div=G('withdrawQueue'); if(!div) return;
   try {
-    const r = await fetch('/api/admin/withdrawals', {cache:'no-store'});
+    const r = await fetch('/api/admin/withdrawals', {cache:'no-store', headers:{'x-user-id':CU?.id || ''}});
     const d = await r.json();
     if(d.success && Array.isArray(d.withdrawals)) {
       D.withdrawals = d.withdrawals.map(w => ({
@@ -7209,7 +7221,7 @@ function rejectKYC(uid) {
 async function approveWithdraw(wid) {
   let w=(D.withdrawals||[]).find(x=>x.id===wid); if(!w) return;
   try {
-    const r = await fetch(`/api/admin/withdrawals/${encodeURIComponent(wid)}/approve`, {method:'POST'});
+    const r = await fetch(`/api/admin/withdrawals/${encodeURIComponent(wid)}/approve`, {method:'POST', headers:{'x-user-id':CU?.id || ''}});
     const d = await r.json();
     if(!r.ok || !d.success) throw new Error(d.error || 'Approve failed');
   } catch(e) {
@@ -7222,7 +7234,7 @@ async function approveWithdraw(wid) {
 async function rejectWithdraw(wid) {
   let w=(D.withdrawals||[]).find(x=>x.id===wid); if(!w) return;
   try {
-    const r = await fetch(`/api/admin/withdrawals/${encodeURIComponent(wid)}/reject`, {method:'POST'});
+    const r = await fetch(`/api/admin/withdrawals/${encodeURIComponent(wid)}/reject`, {method:'POST', headers:{'x-user-id':CU?.id || ''}});
     const d = await r.json();
     if(!r.ok || !d.success) throw new Error(d.error || 'Reject failed');
   } catch(e) {
@@ -8941,12 +8953,17 @@ function initSocket() {
   socket.on('disconnect', () => { socketReady = false; });
   socket.on('chat:message', ({ from, text, media, msgId, timestamp }) => {
     if(!CU || from === CU.id) return;
+    const chatKey = [CU.id, from].sort().join('_');
+    D.chats = D.chats || {};
+    D.chats[chatKey] = D.chats[chatKey] || [];
     let conv = D.conversations = D.conversations || {};
     conv[from] = conv[from] || [];
-    let msg = { id:msgId||Date.now(), from, text, media, t:timestamp, read:false };
+    let msg = { id:msgId||('m'+Date.now()), from, to:CU.id, text:text || '', media, type:media?.type || 'text', at:timestamp || Date.now(), t:timestamp || Date.now(), read:false };
+    if(!D.chats[chatKey].some(m => m.id === msg.id)) D.chats[chatKey].push(msg);
     conv[from].push(msg);
     if(currentChatId === from) {
-      appendChatBubble(msg, false);
+      if(typeof renderChatMsgs === 'function') renderChatMsgs();
+      else appendChatBubble(msg, false);
       socket.emit('chat:read', { to:from, from:CU.id, msgId:msg.id });
     } else {
       G('msgDot') && (G('msgDot').style.display='block');
@@ -8956,6 +8973,22 @@ function initSocket() {
   });
   socket.on('chat:typing', ({ from, isTyping }) => {
     if(currentChatId === from) { let ti=G('typingInd'); if(ti) ti.classList.toggle('show', isTyping); }
+  });
+  socket.on('chat:delete', ({ msgId, from }) => {
+    if(!CU || !msgId) return;
+    const peer = from || currentChatId;
+    const keys = peer ? [[CU.id, peer].sort().join('_')] : Object.keys(D.chats || {});
+    keys.forEach(key => {
+      const msg = (D.chats?.[key] || []).find(m => m.id === msgId);
+      if(msg) {
+        msg.deleted = true;
+        msg.text = 'Message deleted';
+        delete msg.data;
+        delete msg.media;
+      }
+    });
+    saveData();
+    if(currentChatId && typeof renderChatMsgs === 'function') renderChatMsgs();
   });
   socket.on('user:status', ({ userId, status }) => {
     if(D.users[userId]) {
@@ -8974,6 +9007,18 @@ function initSocket() {
     G('notifDot') && (G('notifDot').style.display='block');
     toast('i', notif.msg || '🔔 New notification');
     saveData();
+  });
+  socket.on('post:new', ({post}) => {
+    if(!post || !post.id || !CU) return;
+    D.posts = D.posts || [];
+    const idx = D.posts.findIndex(p => p.id === post.id);
+    if(idx >= 0) D.posts[idx] = {...D.posts[idx], ...post};
+    else D.posts.unshift(post);
+    saveData();
+    if(typeof canViewPost !== 'function' || canViewPost(post)) {
+      if(typeof rFeed === 'function') rFeed();
+      if(post.author !== CU.id) toast('i','New post is available');
+    }
   });
   socket.on('call:incoming', ({ callId, callerId, callerName, callerAvatar, type, iceServers }) => {
     callState.iceServers = iceServers;
@@ -14953,6 +14998,237 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
 </script>
 
 <script>
+/* Monetixra i18n pro + smoothness enhancer */
+(function(){
+  const ready = fn => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn();
+  const idle = fn => (window.requestIdleCallback || (cb => setTimeout(cb, 24)))(fn, {timeout:900});
+  const LANG_KEY = 'mxt_app_language';
+  const CACHE_KEY = 'mxt_i18n_pro_cache_v2';
+  const RTL = new Set(['ar','fa','he','ur']);
+  const SKIP = 'script,style,noscript,textarea,[contenteditable="true"],.post-txt,.cr-bub,.post-nm,.chat-nm,.nft-name,.app-name,.tx-lbl';
+  const TEXT_TARGETS = [
+    'button','.btn','.bn .lbl','.cat-pill','.chip','.page-title','.section-label',
+    '.sett-ttl','.sett-nm','.sett-sub','.task-name','.task-desc','.modal-ttl',
+    '.fl','.wh-lbl','.pstat-l','.ss-l','.profile-tab','.media-chip','label','option',
+    '.call-status','.call-name','.ic-type','.ad-spon','.badge'
+  ].join(',');
+  const ATTR_TARGETS = 'input[placeholder],textarea[placeholder],[title],[aria-label]';
+  const NAV = {
+    feed:'Feed', explore:'Explore', earn:'Earn', friends:'Friends', wallet:'Wallet',
+    messages:'Chat', apps:'Apps', nft:'NFT', metaverse:'Meta', analytics:'Stats',
+    gamification:'Badges', profile:'Me', settings:'Settings'
+  };
+  const LOCAL = {
+    bn:{
+      Feed:'ফিড', Explore:'এক্সপ্লোর', Earn:'আয়', Friends:'বন্ধু', Wallet:'ওয়ালেট',
+      Chat:'চ্যাট', Apps:'অ্যাপস', NFT:'এনএফটি', Meta:'মেটা', Stats:'স্ট্যাটস',
+      Badges:'ব্যাজ', Me:'আমি', Settings:'সেটিংস', Search:'সার্চ', Send:'পাঠান',
+      Save:'সেভ', Cancel:'বাতিল', Delete:'ডিলিট', Share:'শেয়ার', Copy:'কপি',
+      Refresh:'রিফ্রেশ', All:'সব', Posts:'পোস্ট', Media:'মিডিয়া', Saved:'সেভড',
+      Followers:'ফলোয়ার', Following:'ফলোয়িং', Points:'পয়েন্ট', Earnings:'আয়',
+      Notifications:'নোটিফিকেশন', Admin:'অ্যাডমিন', Done:'সম্পন্ন', Go:'যান',
+      Login:'লগইন', 'Sign In':'সাইন ইন', 'Sign Up':'সাইন আপ', 'Send OTP':'OTP পাঠান',
+      'Create Account':'অ্যাকাউন্ট তৈরি করুন', 'App Language':'অ্যাপ ভাষা',
+      'Auto-Translate Posts':'পোস্ট অটো অনুবাদ', 'Translate to your language':'আপনার ভাষায় অনুবাদ',
+      'Edit Profile':'প্রোফাইল এডিট', 'Change Password':'পাসওয়ার্ড পরিবর্তন',
+      'KYC Verification':'KYC যাচাই', 'Privacy & Security':'প্রাইভেসি ও নিরাপত্তা',
+      'Content & Feed':'কনটেন্ট ও ফিড', 'Language & Region':'ভাষা ও অঞ্চল',
+      'Earnings & Wallet':'আয় ও ওয়ালেট', 'Storage & Offline':'স্টোরেজ ও অফলাইন',
+      About:'সম্পর্কে', 'Sign Out':'সাইন আউট', 'Delete Account':'অ্যাকাউন্ট ডিলিট',
+      'Find Friends':'বন্ধু খুঁজুন', 'Create Group':'গ্রুপ তৈরি করুন', 'Start Call':'কল শুরু',
+      'Audio Call':'অডিও কল', 'Video Call':'ভিডিও কল', 'Mint NFT':'NFT মিন্ট',
+      'Mint New NFT':'নতুন NFT মিন্ট', 'Watch Ad':'বিজ্ঞাপন দেখুন', 'Daily Bonus':'ডেইলি বোনাস',
+      'No posts':'কোন পোস্ট নেই', 'No users':'কোন ইউজার নেই', 'No pending withdrawals':'পেন্ডিং উত্তোলন নেই',
+      'Search users, posts, hashtags, NFTs...':'ইউজার, পোস্ট, হ্যাশট্যাগ, NFT সার্চ করুন...',
+      'Search friends by name...':'নাম দিয়ে বন্ধু সার্চ করুন...', 'Search language...':'ভাষা সার্চ করুন...',
+      'Comment...':'কমেন্ট...', 'Current Password':'বর্তমান পাসওয়ার্ড', 'New Password':'নতুন পাসওয়ার্ড',
+      'Confirm Password':'পাসওয়ার্ড নিশ্চিত করুন', Name:'নাম', Username:'ইউজারনেম', Bio:'বায়ো',
+      Location:'লোকেশন', Website:'ওয়েবসাইট', Amount:'পরিমাণ', 'Recipient address':'প্রাপকের ঠিকানা'
+    },
+    hi:{Feed:'फीड',Explore:'एक्सप्लोर',Earn:'कमाई',Friends:'दोस्त',Wallet:'वॉलेट',Chat:'चैट',Apps:'ऐप्स',NFT:'NFT',Meta:'मेटा',Stats:'आंकड़े',Badges:'बैज',Me:'मैं',Settings:'सेटिंग्स',Search:'खोज',Send:'भेजें',Save:'सेव',Cancel:'रद्द',Delete:'डिलीट',Share:'शेयर',Copy:'कॉपी',All:'सभी',Posts:'पोस्ट',Points:'पॉइंट्स'},
+    es:{Feed:'Inicio',Explore:'Explorar',Earn:'Ganar',Friends:'Amigos',Wallet:'Billetera',Chat:'Chat',Apps:'Apps',Meta:'Meta',Stats:'Estadisticas',Badges:'Insignias',Me:'Yo',Settings:'Ajustes',Search:'Buscar',Send:'Enviar',Save:'Guardar',Cancel:'Cancelar',Delete:'Eliminar',Share:'Compartir',Copy:'Copiar',All:'Todo',Posts:'Publicaciones',Points:'Puntos'},
+    fr:{Feed:'Fil',Explore:'Explorer',Earn:'Gagner',Friends:'Amis',Wallet:'Portefeuille',Chat:'Chat',Apps:'Apps',Meta:'Meta',Stats:'Stats',Badges:'Badges',Me:'Moi',Settings:'Parametres',Search:'Rechercher',Send:'Envoyer',Save:'Sauver',Cancel:'Annuler',Delete:'Supprimer',Share:'Partager',Copy:'Copier',All:'Tout',Posts:'Posts',Points:'Points'}
+  };
+  let cache = {};
+  let pendingTimer = 0;
+  try { cache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}') || {}; } catch(e) {}
+
+  function lang(){ return localStorage.getItem(LANG_KEY) || window.currentLang || 'en'; }
+  function clean(text){ return String(text || '').replace(/\s+/g,' ').trim(); }
+  function keyText(text){
+    return clean(text)
+      .replace(/^[^\p{L}\p{N}]+/u,'')
+      .replace(/[›»]+$/,'')
+      .replace(/\s*\([^)]*\)\s*$/,'')
+      .trim();
+  }
+  function local(text, code=lang()){
+    if(code === 'en') return text;
+    const raw = clean(text);
+    const core = keyText(raw);
+    const out = LOCAL[code]?.[raw] || LOCAL[code]?.[core];
+    if(!out) return '';
+    const prefix = raw.match(/^[^\p{L}\p{N}]*/u)?.[0] || '';
+    const suffix = /[›»]$/.test(raw) ? ' ›' : '';
+    return prefix + out + suffix;
+  }
+  function saveCache(){ try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache).slice(0, 220000)); } catch(e) {} }
+  async function batchTranslate(list, code){
+    const unique = [...new Set(list.map(keyText).filter(t => t.length > 1 && t.length < 140))].slice(0, 90);
+    const misses = unique.filter(t => !cache[code + '|' + t] && !local(t, code));
+    if(misses.length) {
+      try {
+        const r = await fetch('/api/translate/batch', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({texts:misses, targetLanguage:code})
+        });
+        const d = await r.json();
+        const out = d.translations || d.translated || [];
+        misses.forEach((t,i) => { cache[code + '|' + t] = out[i] || t; });
+        saveCache();
+      } catch(e) {}
+    }
+    return Object.fromEntries(unique.map(t => [t, local(t, code) || cache[code + '|' + t] || t]));
+  }
+  function setTextNode(node, text, code){
+    node.__mxtSource = node.__mxtSource || node.nodeValue;
+    const source = node.__mxtSource;
+    const translated = local(source, code);
+    if(translated) node.nodeValue = translated;
+    return !!translated;
+  }
+  function applyLocal(root=document, code=lang()){
+    document.documentElement.lang = code;
+    document.documentElement.dir = RTL.has(code) ? 'rtl' : 'ltr';
+    Object.entries(NAV).forEach(([page,label]) => {
+      const el = document.querySelector(`.bn[data-p="${page}"] .lbl`);
+      if(el) {
+        el.dataset.mxtSource = label;
+        el.textContent = local(label, code) || label;
+      }
+    });
+    root.querySelectorAll?.(ATTR_TARGETS).forEach(el => {
+      if(el.closest?.(SKIP)) return;
+      ['placeholder','title','aria-label'].forEach(attr => {
+        const v = el.getAttribute(attr);
+        if(!v) return;
+        const srcAttr = 'data-mxt-source-' + attr;
+        const src = el.getAttribute(srcAttr) || v;
+        el.setAttribute(srcAttr, src);
+        const out = local(src, code);
+        if(out) el.setAttribute(attr, out);
+      });
+    });
+    root.querySelectorAll?.(TEXT_TARGETS).forEach(el => {
+      if(el.closest?.(SKIP)) return;
+      Array.from(el.childNodes || []).forEach(n => {
+        if(n.nodeType === 3 && keyText(n.nodeValue)) setTextNode(n, n.nodeValue, code);
+      });
+    });
+  }
+  function applyRemote(root=document, code=lang()){
+    if(code === 'en') return;
+    const jobs = [];
+    root.querySelectorAll?.(TEXT_TARGETS).forEach(el => {
+      if(el.closest?.(SKIP) || el.dataset.mxtRemoteLang === code) return;
+      if(el.childNodes.length !== 1 || el.childNodes[0].nodeType !== 3) return;
+      const src = el.dataset.mxtSource || el.textContent;
+      el.dataset.mxtSource = src;
+      if(local(src, code)) return;
+      jobs.push({el, src, clean:keyText(src)});
+    });
+    root.querySelectorAll?.(ATTR_TARGETS).forEach(el => {
+      if(el.closest?.(SKIP)) return;
+      ['placeholder','title','aria-label'].forEach(attr => {
+        const src = el.getAttribute('data-mxt-source-' + attr) || el.getAttribute(attr);
+        if(src && !local(src, code)) jobs.push({el, attr, src, clean:keyText(src)});
+      });
+    });
+    if(!jobs.length) return;
+    batchTranslate(jobs.map(j => j.src), code).then(map => {
+      jobs.forEach(j => {
+        const out = map[j.clean];
+        if(!out || out === j.clean) return;
+        if(j.attr) j.el.setAttribute(j.attr, out);
+        else j.el.textContent = String(j.src).replace(j.clean, out);
+        j.el.dataset.mxtRemoteLang = code;
+      });
+    });
+  }
+  function apply(root=document){
+    const code = lang();
+    if(code === 'en') return;
+    applyLocal(root, code);
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => idle(() => applyRemote(root, code)), 120);
+  }
+  function wrap(fnName){
+    const old = window[fnName];
+    if(typeof old !== 'function' || old.__mxtI18nPro) return;
+    window[fnName] = function(){
+      const out = old.apply(this, arguments);
+      idle(() => apply(document.querySelector('.pg.on') || document));
+      return out;
+    };
+    window[fnName].__mxtI18nPro = true;
+  }
+  function installSmoothness(){
+    document.documentElement.classList.add('mxt-smooth-ui');
+    if('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('button,.btn,.bn,.chip,.cat-pill,.media-chip,.sett-row');
+      if(!btn) return;
+      btn.style.willChange = 'transform';
+      setTimeout(() => { btn.style.willChange = ''; }, 220);
+    }, {capture:true, passive:true});
+    const warm = () => {
+      document.querySelectorAll('img[loading!="eager"]').forEach(img => {
+        img.loading = img.closest('.post') ? 'lazy' : (img.loading || 'lazy');
+        img.decoding = 'async';
+      });
+      document.querySelectorAll('video,audio').forEach(m => { if(!m.preload) m.preload = 'metadata'; });
+    };
+    warm();
+    new MutationObserver(() => idle(warm)).observe(document.body, {childList:true, subtree:true});
+  }
+  ready(() => {
+    ['nav','rFeed','rExplore','rEarn','rWallet','rMessages','rFriends','rAppsPage','rNFTMarketplace','rMetaverse','rAnalytics','rGamification','rSettings','rProfile','renderBadges','openModal','showPostMenu','renderChatMsgs'].forEach(wrap);
+    const oldSetLang = window.setLang;
+    window.setLang = function(code){
+      localStorage.setItem(LANG_KEY, code);
+      window.currentLang = code;
+      try { currentLang = code; } catch(e) {}
+      const out = oldSetLang && oldSetLang !== window.setLang ? oldSetLang.apply(this, arguments) : undefined;
+      apply(document);
+      setTimeout(() => apply(document), 250);
+      return out || false;
+    };
+    installSmoothness();
+    apply(document);
+    new MutationObserver(records => {
+      if(lang() === 'en') return;
+      const roots = records.flatMap(r => Array.from(r.addedNodes || [])).filter(n => n.nodeType === 1).slice(0, 8);
+      if(roots.length) idle(() => roots.forEach(apply));
+    }).observe(document.body, {childList:true, subtree:true});
+    window.mxtTranslateEverything = apply;
+  });
+})();
+</script>
+
+<style>
+.mxt-smooth-ui{scroll-behavior:smooth}
+.mxt-smooth-ui body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.mxt-smooth-ui .pg{contain:layout paint style}
+.mxt-smooth-ui .post,.mxt-smooth-ui .task-card,.mxt-smooth-ui .friend-card,.mxt-smooth-ui .nft-item{content-visibility:auto;contain-intrinsic-size:420px}
+.mxt-smooth-ui img{content-visibility:auto}
+.mxt-smooth-ui button,.mxt-smooth-ui .btn,.mxt-smooth-ui .bn,.mxt-smooth-ui .chip,.mxt-smooth-ui .cat-pill{touch-action:manipulation}
+@media (prefers-reduced-motion:reduce){
+  .mxt-smooth-ui *{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+}
+</style>
+
+<script>
 /* Monetixra safety upgrades: signup ads, click rewards, mobile menus, chat delete */
 (function(){
   const ready = fn => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn();
@@ -14965,8 +15241,8 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
     sessionStorage.getItem('mxt_otp_busy') === '1' ||
     isAuthSignupActive();
   const AD_CAP = {maxPerDay:24, minGapMs:45000};
-  const CLICK_REWARD_MIN_DAILY = 10;
-  const CLICK_REWARD_MAX_DAILY = 15;
+  const CLICK_REWARD_MIN_DAILY = 3;
+  const CLICK_REWARD_MAX_DAILY = 3;
   const CLICK_REWARD_POPUP_GAP_MS = 7 * 60 * 1000;
 
   function rewardUserId(){
@@ -15254,7 +15530,7 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
     state.lastShown = now;
     saveRewardState(state);
 
-    const pts = [2,3,5,8,10][Math.floor(Math.random() * 5)];
+    const pts = [2,3,5][Math.floor(Math.random() * 3)];
     const box = document.createElement('div');
     box.className = 'mxt-floating-pts';
     box.innerHTML = `
@@ -15353,7 +15629,7 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
         if(typeof MAX_AD_SYSTEM !== 'undefined') MAX_AD_SYSTEM.triggerContextualAd('before_withdraw');
         const r = await fetch('/api/withdrawals/request', {
           method:'POST',
-          headers:{'Content-Type':'application/json'},
+          headers:{'Content-Type':'application/json','x-user-id':CU.id},
           body:JSON.stringify({userId:CU.id, amount:amt, method:meth, account:acc})
         });
         const d = await r.json().catch(() => ({}));
@@ -15386,8 +15662,9 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
   };
 
   window.deleteChatMessage = function(msgId, everyone=false){
-    if(!window.CU || !window.currentChatId) return;
-    const key = [CU.id,currentChatId].sort().join('_');
+    const peerId = (typeof currentChatId !== 'undefined' ? currentChatId : window.currentChatId);
+    if(!window.CU || !peerId) return;
+    const key = [CU.id,peerId].sort().join('_');
     const msgs = D.chats?.[key] || [];
     const msg = msgs.find(m => m.id === msgId);
     if(!msg) return;
@@ -15400,6 +15677,7 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
       if(!msg.hiddenFor.includes(CU.id)) msg.hiddenFor.push(CU.id);
     }
     saveData();
+    if(everyone && socketReady && socket) socket.emit('chat:delete', {to:peerId, msgId, scope:'everyone'});
     renderChatMsgs();
   };
 
@@ -15407,7 +15685,8 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
   if(typeof oldRenderChatMsgs === 'function') {
     window.renderChatMsgs = function(){
       oldRenderChatMsgs.apply(this, arguments);
-      const key = window.CU && window.currentChatId ? [CU.id,currentChatId].sort().join('_') : '';
+      const peerId = (typeof currentChatId !== 'undefined' ? currentChatId : window.currentChatId);
+      const key = window.CU && peerId ? [CU.id,peerId].sort().join('_') : '';
       const allMsgs = key ? (D.chats?.[key] || []) : [];
       document.querySelectorAll('#crMsgs .cr-msg').forEach((el, i) => {
         const msg = allMsgs[i];
@@ -15433,7 +15712,479 @@ console.log('[Debug] rSettings exists:', typeof rSettings === 'function');
 })();
 </script>
 
+<script>
+/* Monetixra revenue ads + media AI caption comfort layer */
+(function(){
+  const ready = fn => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn();
+  const AD_SHARE = 0.67;
+  const feedTypes = ['adsense_display','adsterra_native','admob_banner','native_feed','rewarded_offer','video_offer','click_to_earn','quiz','poll','banner_300x250','admob_rewarded','premium_offer'];
+  const adWeights = {
+    rewarded_offer:12, video_offer:10, adsterra_native:8, adsense_display:8,
+    banner_300x250:7, admob_rewarded:7, native_feed:6, click_to_earn:5,
+    quiz:4, poll:4, admob_banner:3, premium_offer:8
+  };
+  const featureMap = {
+    feed:['native_feed','adsense_display','adsterra_native','banner_300x250'],
+    post:['rewarded_offer','video_offer','native_feed'],
+    media:['video_offer','admob_rewarded','native_feed','adsense_display'],
+    wallet:['rewarded_offer','premium_offer','adsense_display'],
+    earn:['click_to_earn','quiz','poll','rewarded_offer'],
+    messages:['native_feed','admob_banner','click_to_earn'],
+    apps:['admob_banner','video_offer','native_feed'],
+    default:['native_feed','adsense_display','adsterra_native','admob_banner']
+  };
+
+  function escText(v){
+    if(typeof esc === 'function') return esc(v);
+    return String(v || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+  function pick(list){
+    const pool = [];
+    (list || []).forEach(type => {
+      const score = performanceBoost(type);
+      const weight = Math.max(1, Math.round((adWeights[type] || 3) * score));
+      for(let i = 0; i < weight; i++) pool.push(type);
+    });
+    return pool[Math.floor(Math.random() * pool.length)] || list?.[0] || 'native_feed';
+  }
+  function performanceBoost(type){
+    try {
+      const stats = JSON.parse(localStorage.getItem('mxt_revenue_ad_stats') || '{}');
+      const claims = Number(stats[`${type}_claim`] || 0);
+      const impressions = Object.entries(stats).filter(([k]) => k.startsWith(type + '_')).reduce((s, [,v]) => s + (Number(v) || 0), 0);
+      if(impressions <= 0) return 1;
+      return Math.min(2.4, 1 + (claims / impressions) * 8);
+    } catch(e) { return 1; }
+  }
+  function currentPage(){
+    const on = document.querySelector('.pg.on');
+    return (on?.id || 'pg-feed').replace(/^pg-/,'');
+  }
+  function typeFor(ctx){
+    const list = featureMap[ctx] || featureMap[currentPage()] || featureMap.default;
+    return pick(list);
+  }
+  function adLabel(type){
+    if(/adsense/i.test(type)) return 'Google AdSense';
+    if(/admob/i.test(type)) return 'AdMob';
+    if(/adsterra/i.test(type)) return 'Adsterra';
+    if(/reward|video/i.test(type)) return 'Rewarded Video';
+    if(/quiz|poll|click/i.test(type)) return 'Interactive';
+    return 'Native Sponsor';
+  }
+  function adTheme(i){
+    const themes = [
+      ['#0f766e','#2563eb','Creator growth offer'],
+      ['#7c2d12','#dc2626','Mobile reward placement'],
+      ['#14532d','#16a34a','Relevant sponsor message'],
+      ['#312e81','#0891b2','Smart earning campaign'],
+      ['#713f12','#047857','Premium partner offer']
+    ];
+    return themes[Math.abs(i || 0) % themes.length];
+  }
+  function safeConst(name){
+    try { return typeof window[name] !== 'undefined' ? window[name] : eval('typeof ' + name + ' !== "undefined" ? ' + name + ' : ""'); }
+    catch(e) { return ''; }
+  }
+  function trackAd(type, placement){
+    try {
+      const key = 'mxt_revenue_ad_stats';
+      const stats = JSON.parse(localStorage.getItem(key) || '{}');
+      const id = `${type}_${placement}`;
+      stats[id] = (stats[id] || 0) + 1;
+      stats.last = {type, placement, at:Date.now()};
+      localStorage.setItem(key, JSON.stringify(stats));
+    } catch(e) {}
+  }
+  function claimKey(btn, type, label){
+    const ad = btn?.closest?.('.mxt-rotating-ad,.feed-ad,.ad-container,.ad-native,.mxt-live-ad');
+    if(ad && !ad.dataset.claimId) ad.dataset.claimId = 'mxtad_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+    return btn?.dataset.rewardId || ad?.dataset.claimId || `${type || 'ad'}_${label || 'reward'}_${Date.now()}`;
+  }
+  function wasClaimed(key){
+    try { return sessionStorage.getItem('mxt_ad_claim_' + key) === '1'; } catch(e) { return false; }
+  }
+  function markClaimed(key){
+    try { sessionStorage.setItem('mxt_ad_claim_' + key, '1'); } catch(e) {}
+  }
+  function claimAd(btn, pts, label, type){
+    const key = claimKey(btn, type, label);
+    if(btn?.dataset.claimed || wasClaimed(key)) {
+      if(typeof toast === 'function') toast('w','This ad reward is already claimed');
+      return;
+    }
+    markClaimed(key);
+    if(btn) {
+      btn.dataset.claimed = '1';
+      btn.disabled = true;
+      btn.textContent = 'Claimed';
+    }
+    if(typeof addPts === 'function') addPts(Number(pts) || 1, label || 'Revenue Ad', 'earn');
+    if(typeof toast === 'function') toast('s', `Ad income share: ${Math.round(AD_SHARE * 100)}% credited`);
+    trackAd(type || 'internal', 'claim');
+  }
+  window.mxtClaimRevenueAd = claimAd;
+
+  function networkSlotHtml(type, adIdx){
+    const adsenseClient = safeConst('ADSENSE_CLIENT');
+    const adsenseSlot = safeConst('ADSENSE_SLOT');
+    const adsterraKey = safeConst('ADSTERRA_KEY');
+    if(type === 'adsense_display' && adsenseClient && adsenseSlot) {
+      return `<ins class="adsbygoogle mxt-live-slot" style="display:block;min-height:90px"
+        data-ad-client="${escText(adsenseClient)}" data-ad-slot="${escText(adsenseSlot)}"
+        data-ad-format="auto" data-full-width-responsive="true"></ins>`;
+    }
+    if(type === 'adsterra_native' && adsterraKey) {
+      return `<div class="mxt-live-slot" id="mxt-adsterra-${adIdx}" data-adsterra-key="${escText(adsterraKey)}"></div>`;
+    }
+    if(type === 'admob_banner' || type === 'admob_rewarded') {
+      return `<div class="mxt-live-slot mxt-admob-slot">AdMob placement ready for mobile wrapper</div>`;
+    }
+    return '';
+  }
+  function hydrateNetworkSlot(ad, type, adIdx){
+    setTimeout(() => {
+      try {
+        if(type === 'adsense_display' && window.adsbygoogle) (window.adsbygoogle = window.adsbygoogle || []).push({});
+        if(type === 'adsterra_native') {
+          const slot = ad.querySelector('#mxt-adsterra-' + adIdx);
+          const key = slot?.dataset.adsterraKey;
+          if(slot && key && !slot.dataset.loaded) {
+            slot.dataset.loaded = '1';
+            const sc = document.createElement('script');
+            sc.src = '//www.topcreativeformat.com/' + key + '/invoke.js';
+            slot.appendChild(sc);
+          }
+        }
+      } catch(e) {}
+    }, 300);
+  }
+  function buildInternalAd(adIdx=0, ctx='feed'){
+    const type = typeFor(ctx);
+    const [a,b,title] = adTheme(adIdx);
+    const pts = type.includes('reward') ? 18 : type.includes('video') ? 14 : type.includes('click') ? 8 : 6;
+    const d = document.createElement('div');
+    const slot = networkSlotHtml(type, adIdx);
+    d.className = 'feed-ad mxt-rotating-ad mxt-live-ad';
+    d.dataset.claimId = `mxt_${ctx}_${adIdx}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+    d.dataset.adType = type;
+    d.dataset.adIndex = String(adIdx);
+    d.innerHTML = `
+      <div class="mxt-ra-head"><span>Sponsored</span><b>${escText(adLabel(type))}</b></div>
+      ${slot ? `<div class="mxt-network-wrap">${slot}</div>` : ''}
+      <div class="mxt-ra-body" style="--mxt-a:${a};--mxt-b:${b};">
+        <div class="mxt-ra-mark">AD</div>
+        <div class="mxt-ra-copy">
+          <div class="mxt-ra-title">${escText(title)}</div>
+          <div class="mxt-ra-sub">Rotates by post, feature and user activity without blocking browsing.</div>
+        </div>
+        <button class="mxt-ra-btn" onclick="mxtClaimRevenueAd(this,${pts},'${escText(adLabel(type))} Revenue','${escText(type)}')">+${Math.round(pts * AD_SHARE)} pts</button>
+      </div>`;
+    trackAd(type, ctx);
+    hydrateNetworkSlot(d, type, adIdx);
+    return d;
+  }
+  window.mxtBuildRotatingAd = buildInternalAd;
+
+  function enhanceMkFeedAd(){
+    const old = window.mkFeedAd;
+    window.mkFeedAd = function(adIdx){
+      let ad = null;
+      try { ad = old ? old.apply(this, arguments) : null; } catch(e) {}
+      const fallback = buildInternalAd(adIdx, 'feed');
+      if(!ad) return fallback;
+      ad.classList.add('mxt-rotating-ad');
+      ad.dataset.claimId = ad.dataset.claimId || `mxt_feed_${adIdx}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+      ad.dataset.rotateEvery = '3-posts';
+      const badge = document.createElement('div');
+      badge.className = 'mxt-ra-network';
+      badge.textContent = adLabel(typeFor('feed')) + ' rotating';
+      ad.insertBefore(badge, ad.firstChild);
+      trackAd('network_or_internal', 'feed_every_3_posts');
+      setTimeout(() => {
+        if(ad.isConnected && !ad.dataset.refreshed) {
+          ad.dataset.refreshed = '1';
+          ad.appendChild(buildInternalAd(adIdx + Date.now(), 'feed'));
+        }
+      }, 45000 + ((adIdx % 4) * 5000));
+      return ad;
+    };
+  }
+  function ensureFeedAds(){
+    const list = document.getElementById('feedList');
+    if(!list) return;
+    const posts = Array.from(list.children).filter(el => el.classList?.contains('post'));
+    posts.forEach((post, idx) => {
+      if((idx + 1) % 3 !== 0) return;
+      let next = post.nextElementSibling;
+      while(next && next.nodeType === 1 && next.matches?.('.post-loader,.comments-wrap')) next = next.nextElementSibling;
+      if(next?.matches?.('.feed-ad,.ad-container,.mxt-rotating-ad')) return;
+      post.insertAdjacentElement('afterend', buildInternalAd(idx + 1 + Date.now(), 'feed'));
+    });
+  }
+  function wrapFeedRenderer(){
+    const old = window.rFeed;
+    if(typeof old !== 'function' || old.__mxtFeedAds) return;
+    window.rFeed = function(){
+      const out = old.apply(this, arguments);
+      setTimeout(ensureFeedAds, 80);
+      return out;
+    };
+    window.rFeed.__mxtFeedAds = true;
+  }
+
+  function installComfortCaps(){
+    const max = window.MAX_AD_SYSTEM;
+    if(!max || max.__mxtComfort) return;
+    max.__mxtComfort = true;
+    const origTrigger = max.triggerContextualAd?.bind(max);
+    max.triggerContextualAd = function(triggerType){
+      const now = Date.now();
+      const key = 'mxt_comfort_context_' + String(triggerType || 'default');
+      const globalKey = 'mxt_comfort_context_global';
+      const last = Number(localStorage.getItem(key) || 0);
+      const globalLast = Number(localStorage.getItem(globalKey) || 0);
+      if(now - last < 180000 || now - globalLast < 60000) return;
+      localStorage.setItem(key, String(now));
+      localStorage.setItem(globalKey, String(now));
+      return origTrigger ? origTrigger(triggerType) : null;
+    };
+    const origFloat = max.injectFloatingAd?.bind(max);
+    max.injectFloatingAd = function(adType){
+      const now = Date.now();
+      const last = Number(sessionStorage.getItem('mxt_float_ad_last') || 0);
+      if(now - last < 120000 || document.querySelector('.floating-contextual-ad,.mxt-reward-gate')) return;
+      sessionStorage.setItem('mxt_float_ad_last', String(now));
+      return origFloat ? origFloat(adType) : null;
+    };
+  }
+
+  function cleanCaptionText(text){
+    return String(text || '')
+      .replace(/^\s*(✨|AI Caption|Auto-caption:)\s*/i,'')
+      .replace(/\s*Tap to use\s*$/i,'')
+      .trim();
+  }
+  async function mediaCaption(){
+    const editor = document.getElementById('postEditor');
+    const out = document.getElementById('aiOutput');
+    if(out) out.innerHTML = '<div class="ai-caption-result">Generating media caption...</div>';
+    const mime = (typeof pfMime !== 'undefined' ? pfMime : '') || '';
+    const name = (typeof pfName !== 'undefined' ? pfName : 'media') || 'media';
+    const data = (typeof pfData !== 'undefined' ? pfData : '') || '';
+    try {
+      if(data && (mime.startsWith('audio/') || mime.startsWith('video/') || mime.startsWith('image/'))) {
+        const r = await fetch('/api/ai/transcribe', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name, data, type:mime})
+        });
+        const d = await r.json().catch(() => ({}));
+        let cap = d.caption || d.text || d.transcript || d.fallback || '';
+        if(!cap) cap = `${mime.startsWith('video/') ? 'Video' : mime.startsWith('audio/') ? 'Audio' : 'Photo'}: ${name}. #Monetixra #Creator`;
+        cap = cleanCaptionText(cap);
+        if(editor) editor.innerText = cap;
+        if(out) out.innerHTML = `<div class="ai-caption-result">${escText(cap)}<br><small style="color:var(--t3);">Added to post text box</small></div>`;
+        if(typeof toast === 'function') toast('s','AI Caption added');
+        return cap;
+      }
+    } catch(e) {}
+    if(typeof window.aiGenerateCaption === 'function') {
+      await window.aiGenerateCaption(true);
+      const result = document.querySelector('#aiOutput .ai-caption-result');
+      const cap = cleanCaptionText(result?.innerText || '');
+      if(cap && editor) editor.innerText = cap;
+    }
+  }
+  window.mxtMediaCaption = mediaCaption;
+
+  function wireAiCaption(){
+    document.querySelectorAll('#aiPanelSection .ai-chip').forEach(chip => {
+      if(/AI Caption/i.test(chip.textContent || '')) chip.setAttribute('onclick','mxtMediaCaption()');
+    });
+  }
+
+  function wrapPointsShare(){
+    if(window.addPts?.__mxtShare) return;
+    const old = window.addPts;
+    if(typeof old !== 'function') return;
+    window.addPts = function(pts, label, type='earn'){
+      const isAd = type === 'earn' && /ad|ads|watch|reward|sponsor|banner|native|admob|adsense|adsterra/i.test(String(label || ''));
+      if(isAd) {
+        const grossForShare = Math.max(1, Math.round((Number(pts) || 0) * 0.74));
+        return old.call(this, grossForShare, `${label} (${Math.round(AD_SHARE * 100)}% user share)`, type);
+      }
+      return old.apply(this, arguments);
+    };
+    window.addPts.__mxtShare = true;
+  }
+
+  function triggerMediaAd(e){
+    const media = e.target;
+    if(!media?.matches?.('.post-media video,.post-media audio')) return;
+    if(media.dataset.mxtMediaAd) return;
+    media.dataset.mxtMediaAd = '1';
+    setTimeout(() => {
+      const post = media.closest('.post');
+      if(!post || post.querySelector('.mxt-media-inline-ad')) return;
+      const ad = buildInternalAd(Date.now(), 'media');
+      ad.classList.add('mxt-media-inline-ad');
+      post.querySelector('.post-media')?.insertAdjacentElement('afterend', ad);
+    }, 12000);
+  }
+  function installOncePerAdRewards(){
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('button,.btn,.mxt-ra-btn,.ba-earn,.mxt-floating-pts-btn');
+      if(!btn || btn.classList.contains('mxt-ra-btn')) return;
+      const ad = btn.closest('.ad-container,.feed-ad,.ad-native,.mxt-rotating-ad,.mxt-floating-pts,.mxt-reward-gate');
+      if(!ad) return;
+      const onclick = String(btn.getAttribute('onclick') || '');
+      const text = String(btn.textContent || '');
+      if(!/addPts|clickFeedAd|Claim|Earn|pts|\+\s*\d+/i.test(onclick + ' ' + text)) return;
+      const key = claimKey(btn, ad.dataset.adType || 'inline', text);
+      if(wasClaimed(key) || btn.dataset.claimed === '1') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if(typeof toast === 'function') toast('w','Already claimed from this ad');
+        return;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const ptsMatch = (onclick + ' ' + text).match(/\+?\s*(\d+)\s*pts/i) || onclick.match(/addPts\((\d+)/i) || onclick.match(/clickFeedAd\(this,(\d+)/i);
+      const pts = ptsMatch ? Number(ptsMatch[1]) : 3;
+      claimAd(btn, pts, 'One-time Ad Reward', ad.dataset.adType || 'inline_ad');
+      if(/closest\(['"]\.ad-container['"]\)\.remove|parentElement\.remove/i.test(onclick)) setTimeout(() => ad.remove(), 350);
+    }, true);
+  }
+  function installFeatureAdTargets(){
+    const pageAds = () => {
+      document.querySelectorAll('.pg').forEach(pg => {
+        if(pg.querySelector('.mxt-page-scalable-ad')) return;
+        const ctx = (pg.id || '').replace(/^pg-/,'') || 'default';
+        const ad = buildInternalAd(Date.now() + Math.floor(Math.random()*1000), featureMap[ctx] ? ctx : 'default');
+        ad.classList.add('mxt-page-scalable-ad');
+        const anchor = pg.querySelector('.page-title,.earn-hero,.wallet-hero,.composer,.section-label') || pg.firstElementChild;
+        if(anchor?.nextSibling) anchor.parentNode.insertBefore(ad, anchor.nextSibling);
+        else pg.appendChild(ad);
+      });
+    };
+    pageAds();
+    setInterval(() => {
+      document.querySelectorAll('.mxt-page-scalable-ad').forEach(ad => {
+        if(!ad.matches(':hover') && Math.random() < 0.35) ad.replaceWith(buildInternalAd(Date.now(), currentPage()));
+      });
+    }, 90000);
+  }
+  function rotateContextAds(ctx=currentPage()){
+    document.querySelectorAll('.mxt-page-scalable-ad').forEach(ad => {
+      if(!ad.matches(':hover')) ad.replaceWith(buildInternalAd(Date.now() + Math.floor(Math.random()*1000), featureMap[ctx] ? ctx : 'default'));
+    });
+    const bottom = document.getElementById('mxtBottomLiveAd');
+    if(bottom) updateBottomLiveAd(ctx);
+  }
+  function bottomMessages(ctx){
+    const type = typeFor(ctx || currentPage());
+    const network = adLabel(type);
+    const sets = {
+      feed:['Every 3 posts: native + banner mix','Fresh sponsor after each feed section','High viewability in-feed placement'],
+      media:['Video/audio break sponsor','Rewarded media offer','Photo viewer native banner'],
+      earn:['Rewarded offer first','Click-to-earn sponsor','Quiz and poll ad rotation'],
+      wallet:['Withdrawal sponsor','Premium payout offer','Finance-ready display ad'],
+      messages:['Chat-safe native sponsor','Compact AdMob banner','Conversation break offer'],
+      default:['Page-specific live sponsor','Rotating scalable banner','Smart revenue placement']
+    };
+    const copy = sets[ctx] || sets.default;
+    return {type, network, copy};
+  }
+  function updateBottomLiveAd(ctx=currentPage()){
+    const bar = document.getElementById('mxtBottomLiveAd');
+    const track = document.getElementById('mxtBottomAdTrack');
+    if(!bar || !track) return;
+    const {type, network, copy} = bottomMessages(ctx);
+    bar.dataset.adType = type;
+    bar.dataset.claimId = bar.dataset.claimId || `mxt_bottom_${Date.now()}_${Math.random().toString(36).slice(2,7)}`;
+    track.innerHTML = copy.concat(copy).map((msg, i) => i % 2 ? `<b>${escText(network)}</b>` : `<span>${escText(msg)}</span>`).join('');
+    track.style.animation = 'none';
+    track.offsetHeight;
+    track.style.animation = '';
+    trackAd(type, 'bottom_live_banner');
+  }
+  window.mxtClaimBottomAd = function(btn){
+    const bar = document.getElementById('mxtBottomLiveAd');
+    const type = bar?.dataset.adType || 'bottom_banner';
+    claimAd(btn, 4, adLabel(type) + ' Bottom Banner', type);
+    setTimeout(() => updateBottomLiveAd(currentPage()), 500);
+  };
+  function installNavAdRefresh(){
+    const oldNav = window.nav;
+    if(typeof oldNav === 'function' && !oldNav.__mxtAdRefresh) {
+      window.nav = function(page){
+        const out = oldNav.apply(this, arguments);
+        setTimeout(() => rotateContextAds(page || currentPage()), 120);
+        return out;
+      };
+      window.nav.__mxtAdRefresh = true;
+    }
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('button,.bn,.chip,.media-chip,.eh-btn,.sett-row,.app-card,.task-card');
+      if(!btn || btn.closest('.feed-ad,.mxt-rotating-ad,.mxt-bottom-live-ad,.mxt-reward-gate')) return;
+      if(Math.random() < 0.28) setTimeout(() => updateBottomLiveAd(currentPage()), 80);
+    }, true);
+  }
+
+  ready(() => {
+    enhanceMkFeedAd();
+    wrapFeedRenderer();
+    setTimeout(ensureFeedAds, 300);
+    installComfortCaps();
+    wrapPointsShare();
+    wireAiCaption();
+    installOncePerAdRewards();
+    installFeatureAdTargets();
+    installNavAdRefresh();
+    updateBottomLiveAd(currentPage());
+    setInterval(() => updateBottomLiveAd(currentPage()), 45000);
+    document.addEventListener('play', triggerMediaAd, true);
+    new MutationObserver(() => ensureFeedAds()).observe(document.body, {childList:true, subtree:true});
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('button,.media-chip,.sett-row,.eh-btn,.bn');
+      if(!btn || btn.closest('#postModal') || btn.dataset.mxtFeatureAd) return;
+      btn.dataset.mxtFeatureAd = '1';
+      if(Math.random() < 0.18 && window.MAX_AD_SYSTEM) window.MAX_AD_SYSTEM.triggerContextualAd('feature_' + currentPage());
+    }, true);
+    setInterval(installComfortCaps, 5000);
+  });
+})();
+</script>
+
 <style>
+.mxt-bottom-live-ad{position:fixed;left:0;right:0;bottom:calc(54px + env(safe-area-inset-bottom));z-index:99998;height:34px;background:rgba(3,3,8,.96);border-top:1px solid var(--b1);border-bottom:1px solid var(--b1);display:flex;align-items:center;gap:8px;overflow:hidden;backdrop-filter:blur(18px)}
+.mxt-bottom-track{display:flex;align-items:center;gap:18px;min-width:max-content;padding-left:100%;font-size:11px;color:var(--t2);white-space:nowrap;animation:mxtBottomAdScroll 24s linear infinite}
+.mxt-bottom-track span{color:var(--t3)}
+.mxt-bottom-track b{color:var(--neon);font-weight:900}
+.mxt-bottom-claim{position:absolute;right:8px;top:5px;border:1px solid rgba(255,255,255,.24);background:linear-gradient(135deg,var(--c1),var(--c2));color:#fff;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:900;cursor:pointer}
+.mxt-bottom-claim:disabled{opacity:.68;cursor:default}
+@keyframes mxtBottomAdScroll{from{transform:translateX(0)}to{transform:translateX(-100%)}}
+.mxt-rotating-ad{background:var(--g2);border:1px solid var(--b1);border-radius:12px;overflow:hidden;margin:10px 0}
+.mxt-ra-network{font-size:9px;color:var(--t3);padding:4px 10px;text-align:right;border-bottom:1px solid var(--b1)}
+.mxt-ra-head{display:flex;justify-content:space-between;gap:8px;padding:5px 10px;font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.4px}
+.mxt-ra-head b{color:var(--t2)}
+.mxt-ra-body{display:flex;align-items:center;gap:10px;padding:10px;background:linear-gradient(135deg,var(--mxt-a),var(--mxt-b));color:#fff}
+.mxt-ra-mark{width:38px;height:38px;border-radius:8px;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;flex:0 0 auto}
+.mxt-ra-copy{flex:1;min-width:0}
+.mxt-ra-title{font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mxt-ra-sub{font-size:11px;opacity:.82;margin-top:2px;line-height:1.35}
+.mxt-ra-btn{border:1px solid rgba(255,255,255,.38);background:rgba(255,255,255,.18);color:#fff;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:900;cursor:pointer;white-space:nowrap}
+.mxt-ra-btn:disabled{opacity:.7;cursor:default}
+.mxt-network-wrap{padding:8px 10px;border-top:1px solid var(--b1);background:rgba(255,255,255,.025)}
+.mxt-live-slot{display:flex;align-items:center;justify-content:center;width:100%;min-height:72px;border:1px dashed var(--b1);border-radius:8px;color:var(--t3);font-size:11px;text-align:center;overflow:hidden}
+.mxt-admob-slot{background:linear-gradient(135deg,rgba(15,118,110,.12),rgba(37,99,235,.12));color:var(--t2);font-weight:700}
+.mxt-page-scalable-ad{margin:10px 0 12px}
+@media (max-width:520px){
+  .mxt-ra-body{align-items:flex-start}
+  .mxt-ra-title{white-space:normal}
+  .mxt-live-slot{min-height:56px}
+}
 .mxt-feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .mxt-feature-grid button{background:var(--g2);border:1px solid var(--b1);color:var(--t1);border-radius:8px;padding:10px 8px;font-size:12px;font-weight:700;text-align:left;cursor:pointer}
 .mxt-feature-grid button:active{transform:scale(.98)}

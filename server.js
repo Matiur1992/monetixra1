@@ -194,7 +194,9 @@ function sameAccountRecord(user, loginId) {
 
 function isAdminRequest(req) {
   const adminId = req.headers['x-user-id'] || req.query.userId || req.body?.userId;
-  const adminRole = String(req.headers['x-admin-role'] || req.query.admin || '').toLowerCase() === 'true';
+  const suppliedSecret = req.headers['x-admin-secret'] || req.query.adminSecret || req.body?.adminSecret || '';
+  const trustedRoleHeader = !!(process.env.ADMIN_API_SECRET && suppliedSecret && suppliedSecret === process.env.ADMIN_API_SECRET);
+  const adminRole = trustedRoleHeader && String(req.headers['x-admin-role'] || req.query.admin || '').toLowerCase() === 'true';
   const user = adminId ? syncStore.users.get(String(adminId)) : null;
   return adminRole || !!(user && (user.isAdmin || user.is_admin));
 }
@@ -1041,9 +1043,17 @@ app.post('/api/posts/sync', async(req,res)=>{
   try {
     const postData = req.body;
     if(!postData || !postData.id) return res.status(400).json({error:'Post id required'});
-    syncStore.posts.set(postData.id, {...(syncStore.posts.get(postData.id)||{}), ...postData, syncedAt:Date.now()});
-    await persistPost(postData);
+    const savedPost = {...(syncStore.posts.get(postData.id)||{}), ...postData, syncedAt:Date.now()};
+    syncStore.posts.set(postData.id, savedPost);
+    await persistPost(savedPost);
     updateIndexes();
+    io.emit('post:new', {post:savedPost});
+    const author = syncStore.users.get(String(savedPost.author || '')) || {};
+    const audience = new Set([...(author.followers || []), ...(author.following || []), ...(author.autoFriends || []), ...(author.forceFollowed || [])]);
+    for(const userId of audience) {
+      const sid = onlineUsers.get(String(userId));
+      if(sid) io.to(sid).emit('notif:receive', {type:'post', postId:savedPost.id, msg:`${author.name || 'Someone'} created a new post`});
+    }
     console.log(`[Sync] Post: ${postData.id}`);
     res.json({success: true, synced: true, persisted: true, id: postData.id, totalPosts: syncStore.posts.size});
   } catch(e) {
@@ -1594,7 +1604,10 @@ io.on('connection', socket=>{
   });
   socket.on('chat:typing',  ({to,from,isTyping})=>{ from = socket.userId || from; const s=onlineUsers.get(to); if(s) io.to(s).emit('chat:typing',{from,isTyping}); });
   socket.on('chat:read',    ({to,from,msgId})   =>{ from = socket.userId || from; const s=onlineUsers.get(to); if(s) io.to(s).emit('chat:read',{from,msgId}); });
-  socket.on('chat:delete',  ({to,msgId})         =>{ const s=onlineUsers.get(to); if(s) io.to(s).emit('chat:delete',{msgId}); });
+  socket.on('chat:delete',  ({to,msgId,scope='everyone'})=>{
+    const s=onlineUsers.get(to);
+    if(s) io.to(s).emit('chat:delete',{msgId,scope,from:socket.userId});
+  });
 
   // Rooms
   socket.on('room:join',    ({roomId,userId})=>{ socket.join(roomId); if(!rooms.has(roomId)) rooms.set(roomId,new Set()); rooms.get(roomId).add(socket.id); socket.to(roomId).emit('room:user:joined',{userId}); });
@@ -1624,6 +1637,15 @@ io.on('connection', socket=>{
   socket.on('live:gift',    ({streamerId,from,gift})=>{ io.to('live:'+streamerId).emit('live:gift',{from,gift,t:Date.now()}); });
 
   // Posts
+  socket.on('post:create', ({post})=>{
+    if(!post || !post.id) return;
+    if(socket.userId && post.author && String(post.author) !== String(socket.userId)) return socket.emit('auth:error',{error:'post_author_mismatch'});
+    const savedPost = {...(syncStore.posts.get(post.id)||{}), ...post, author:socket.userId || post.author, syncedAt:Date.now()};
+    syncStore.posts.set(savedPost.id, savedPost);
+    persistPost(savedPost).catch(()=>{});
+    updateIndexes();
+    io.emit('post:new', {post:savedPost});
+  });
   socket.on('post:react',   ({postId,userId,reaction})=>{ userId = socket.userId || userId; io.emit('post:reacted',{postId,userId,reaction}); });
   socket.on('post:comment', ({postId,authorId,comment})=>{ const s=onlineUsers.get(authorId); if(s) io.to(s).emit('post:new:comment',{postId,comment}); io.emit('post:commented',{postId,comment}); });
 
